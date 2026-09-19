@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { progressFor, recordAnswerIn, totalScore } from "./features/vocabulary/progress";
 import { selectNextWord } from "./features/vocabulary/selection";
-import { loadProgress, saveProgress } from "./features/vocabulary/storage";
+import { loadProgress, mayPersist, saveProgress } from "./features/vocabulary/storage";
 import type { AnswerResult, ProgressMap } from "./features/vocabulary/types";
 import { WordCard } from "./features/vocabulary/WordCard";
 import { words } from "./features/vocabulary/words";
@@ -9,13 +9,19 @@ import { words } from "./features/vocabulary/words";
 /** 画面が持つ状態。保存できたかどうかは storage 層の戻り値をそのまま持つ。 */
 type VocabularyState = {
   progressMap: ProgressMap;
+  /**
+   * この起動で保存してよいか。起動時の読み出し結果から storage 層が決める。
+   * false の起動では、既存の記録を空起点のデータで上書きしないよう一切保存しない。
+   */
+  savingAllowed: boolean;
   /** 直近の読み書きが成功していれば true。UI 側では判定せず storage 層の結果を使う。 */
   persisted: boolean;
 };
 
 function initialState(): VocabularyState {
   const loaded = loadProgress();
-  return { progressMap: loaded.progressMap, persisted: loaded.ok };
+  const savingAllowed = mayPersist(loaded);
+  return { progressMap: loaded.progressMap, savingAllowed, persisted: savingAllowed };
 }
 
 export function App() {
@@ -27,7 +33,9 @@ export function App() {
   const handleAnswer = (result: AnswerResult) => {
     if (word === undefined) return;
     const next = recordAnswerIn(state.progressMap, word.id, result);
-    setState({ progressMap: next, persisted: saveProgress(next) });
+    // 保存しない起動では persisted も false のままにし、警告を出し続ける。
+    const persisted = state.savingAllowed ? saveProgress(next) : false;
+    setState({ ...state, progressMap: next, persisted });
   };
 
   return (

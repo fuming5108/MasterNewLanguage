@@ -1,6 +1,6 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, type MockInstance, vi } from "vitest";
 import { App } from "./App";
 import { PROGRESS_STORAGE_KEY } from "./features/vocabulary/storage";
 import { words } from "./features/vocabulary/words";
@@ -15,11 +15,31 @@ function breakSaving(): () => void {
   };
 }
 
-/** localStorage からの読み出しを失敗させる。 */
-function breakLoading(): void {
-  vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => {
+/** localStorage からの読み出しを失敗させる。戻り値は getItem のスパイ。 */
+function breakLoading(): MockInstance<(key: string) => string | null> {
+  return vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => {
     throw new Error("読み出しできません");
   });
+}
+
+/** localStorage の中身をそのまま（生の文字列のまま）写し取る。 */
+function snapshotStorage(): Record<string, string> {
+  const snapshot: Record<string, string> = {};
+  for (let index = 0; index < localStorage.length; index += 1) {
+    const key = localStorage.key(index);
+    if (key === null) continue;
+    const value = localStorage.getItem(key);
+    if (value === null) continue;
+    snapshot[key] = value;
+  }
+  return snapshot;
+}
+
+/** 既存の学習記録を localStorage に直接書き込み、その生の文字列を返す。 */
+function seedStoredProgress(progress: Record<string, unknown>): string {
+  const raw = JSON.stringify(progress);
+  localStorage.setItem(PROGRESS_STORAGE_KEY, raw);
+  return raw;
 }
 
 function storedProgress(): unknown {
@@ -251,5 +271,126 @@ describe("App", () => {
     expect(screen.getByTestId("total-score")).toHaveTextContent("累計 正解 0 / 不正解 0");
     expect(screen.getByRole("heading", { name: words[0].fr })).toBeInTheDocument();
     expect(screen.getByTestId("score")).toHaveTextContent("正解 0 / 不正解 0");
+  });
+
+  it("読み出しに失敗した起動で「わかる」を押しても localStorage の内容が変化しない", async () => {
+    seedStoredProgress({
+      [words[0].id]: { wordId: words[0].id, correct: 3, incorrect: 2 },
+    });
+    const before = snapshotStorage();
+    breakLoading();
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(screen.getByRole("button", { name: "わかる" }));
+
+    vi.restoreAllMocks();
+    expect(snapshotStorage()).toEqual(before);
+  });
+
+  it("読み出しに失敗した起動で「わからない」を押しても localStorage の内容が変化しない", async () => {
+    seedStoredProgress({
+      [words[0].id]: { wordId: words[0].id, correct: 3, incorrect: 2 },
+    });
+    const before = snapshotStorage();
+    breakLoading();
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(screen.getByRole("button", { name: "わからない" }));
+
+    vi.restoreAllMocks();
+    expect(snapshotStorage()).toEqual(before);
+  });
+
+  it("読み出しに失敗した起動でも回答を続けられ、次の単語に進める", async () => {
+    breakLoading();
+    const user = userEvent.setup();
+    render(<App />);
+
+    expect(screen.getByRole("heading", { name: words[0].fr })).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "わかる" }));
+    expect(screen.getByRole("heading", { name: words[1].fr })).toBeInTheDocument();
+
+    const nextButton = screen.getByRole("button", { name: "わからない" });
+    expect(nextButton).toBeEnabled();
+    await user.click(nextButton);
+
+    expect(screen.getByRole("heading", { name: words[2].fr })).toBeInTheDocument();
+    expect(screen.getByTestId("total-score")).toHaveTextContent("累計 正解 1 / 不正解 1");
+  });
+
+  it("読み出しに失敗した起動では、回答しても警告が消えない", async () => {
+    breakLoading();
+    const user = userEvent.setup();
+    render(<App />);
+
+    expect(screen.getByTestId("storage-warning")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "わかる" }));
+    expect(screen.getByTestId("storage-warning")).toHaveTextContent("保存できませんでした");
+    expect(screen.getByRole("alert")).toBe(screen.getByTestId("storage-warning"));
+
+    await user.click(screen.getByRole("button", { name: "わからない" }));
+    expect(screen.getByTestId("storage-warning")).toHaveTextContent("保存できませんでした");
+    expect(screen.getByRole("alert")).toBe(screen.getByTestId("storage-warning"));
+  });
+
+  it("読み出しに失敗した起動で答えたあと、読み出せる状態で開き直すと元の記録が残っている", async () => {
+    const before = seedStoredProgress({
+      [words[0].id]: { wordId: words[0].id, correct: 3, incorrect: 2 },
+    });
+    breakLoading();
+    const user = userEvent.setup();
+    const first = render(<App />);
+
+    await user.click(screen.getByRole("button", { name: "わかる" }));
+    await user.click(screen.getByRole("button", { name: "わからない" }));
+    await user.click(screen.getByRole("button", { name: "わかる" }));
+    first.unmount();
+
+    vi.restoreAllMocks();
+    expect(localStorage.getItem(PROGRESS_STORAGE_KEY)).toBe(before);
+
+    render(<App />);
+
+    expect(screen.getByTestId("total-score")).toHaveTextContent("累計 正解 3 / 不正解 2");
+    expect(storedProgress()).toEqual({
+      [words[0].id]: { wordId: words[0].id, correct: 3, incorrect: 2 },
+    });
+  });
+
+  it("読み出しに成功した起動では、既存の記録に回答が足されて localStorage に保存される", async () => {
+    seedStoredProgress({
+      [words[0].id]: { wordId: words[0].id, correct: 3, incorrect: 2 },
+    });
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(screen.getByRole("button", { name: "わかる" }));
+
+    expect(storedProgress()).toEqual({
+      [words[0].id]: { wordId: words[0].id, correct: 3, incorrect: 2 },
+      [words[1].id]: { wordId: words[1].id, correct: 1, incorrect: 0 },
+    });
+    expect(screen.queryByTestId("storage-warning")).not.toBeInTheDocument();
+  });
+
+  it("読み出しに失敗した起動では localStorage への書き込みが一度も行われない", async () => {
+    seedStoredProgress({
+      [words[0].id]: { wordId: words[0].id, correct: 3, incorrect: 2 },
+    });
+    const setItem = vi.spyOn(Storage.prototype, "setItem");
+    const getItem = breakLoading();
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(screen.getByRole("button", { name: "わかる" }));
+    await user.click(screen.getByRole("button", { name: "わからない" }));
+
+    expect(setItem).not.toHaveBeenCalled();
+    // 画面は起動時の読み出し結果だけで判断し、回答のたびに localStorage を読み直さない。
+    expect(getItem).toHaveBeenCalledTimes(1);
   });
 });
