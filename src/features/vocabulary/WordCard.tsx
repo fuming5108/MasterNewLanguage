@@ -1,24 +1,24 @@
 import { useState } from "react";
-import { emptyProgress, recordAnswer } from "./progress";
-import type { AnswerResult, Word } from "./types";
+import type { AnswerResult, Word, WordProgress } from "./types";
 
 type WordCardProps = {
   word: Word;
+  /** この単語の学習記録。表示のみに使い、更新は親が行う。 */
+  progress: WordProgress;
   /** 回答が記録されたときに呼ばれる。学習履歴の保存などに使う。 */
-  onAnswer?: (result: AnswerResult) => void;
+  onAnswer: (result: AnswerResult) => void;
 };
 
 /**
- * 単語1件を表示し、「わかる」「わからない」の回答を記録する最小のカード。
+ * 単語1件を表示し、「わかる」「わからない」の回答を親に渡すカード。
+ * 学習記録は親（App）が持つため、このコンポーネントは記録を保持しない。
  */
-export function WordCard({ word, onAnswer }: WordCardProps) {
+export function WordCard({ word, progress, onAnswer }: WordCardProps) {
   const [revealed, setRevealed] = useState(false);
-  const [progress, setProgress] = useState(() => emptyProgress(word.id));
 
   const answer = (result: AnswerResult) => {
-    setProgress((current) => recordAnswer(current, result));
     setRevealed(false);
-    onAnswer?.(result);
+    onAnswer(result);
   };
 
   return (

@@ -18,3 +18,6 @@ export type WordProgress = {
   correct: number;
   incorrect: number;
 };
+
+/** 単語 id をキーにした学習記録の集合。未学習の単語はキーを持たない。 */
+export type ProgressMap = Record<string, WordProgress>;
