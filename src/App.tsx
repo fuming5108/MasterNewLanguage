@@ -2,6 +2,7 @@ import { useState } from "react";
 import { progressFor, recordAnswerIn, totalScore } from "./features/vocabulary/progress";
 import { selectNextWord } from "./features/vocabulary/selection";
 import { loadProgress, mayPersist, saveProgress } from "./features/vocabulary/storage";
+import { storageWarningFor } from "./features/vocabulary/storageWarning";
 import type { AnswerResult, ProgressMap } from "./features/vocabulary/types";
 import { WordCard } from "./features/vocabulary/WordCard";
 import { words } from "./features/vocabulary/words";
@@ -29,6 +30,8 @@ export function App() {
 
   const word = selectNextWord(words, state.progressMap);
   const total = totalScore(state.progressMap);
+  // 文言の出し分けは純粋関数に任せ、画面は結果を表示するだけにする。
+  const warning = storageWarningFor(state);
 
   const handleAnswer = (result: AnswerResult) => {
     if (word === undefined) return;
@@ -42,10 +45,9 @@ export function App() {
     <main>
       <h1>フランス語 語彙トレーニング</h1>
 
-      {state.persisted ? null : (
+      {warning === undefined ? null : (
         <p role="alert" data-testid="storage-warning">
-          学習記録を保存できませんでした。このブラウザでは記録が残らないため、
-          ページを閉じたり再読み込みしたりすると学習内容が失われます。
+          {warning}
         </p>
       )}
 

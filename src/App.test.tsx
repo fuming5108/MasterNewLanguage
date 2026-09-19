@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, type MockInstance, vi } from "vitest";
 import { App } from "./App";
 import { PROGRESS_STORAGE_KEY } from "./features/vocabulary/storage";
+import { LOAD_FAILED_WARNING, SAVE_FAILED_WARNING } from "./features/vocabulary/storageWarning";
 import { words } from "./features/vocabulary/words";
 
 /** localStorage への保存を失敗させる。戻り値を呼ぶと保存できる状態に戻る。 */
@@ -247,15 +248,58 @@ describe("App", () => {
     });
   });
 
-  it("起動時に読み出しが失敗すると同じ警告を表示する", () => {
+  it("起動時に読み出しが失敗すると、読み込めなかった旨の警告を表示する", () => {
     breakLoading();
 
     render(<App />);
 
     const alert = screen.getByRole("alert");
     expect(alert).toBe(screen.getByTestId("storage-warning"));
-    expect(alert).toHaveTextContent("保存できませんでした");
+    expect(alert).toHaveTextContent("学習記録を読み込めなかったため、この回は保存されません。");
+    expect(alert.textContent).toBe(LOAD_FAILED_WARNING);
     expect(screen.getByTestId("total-score")).toHaveTextContent("累計 正解 0 / 不正解 0");
+  });
+
+  it("読み出しに失敗した起動では、保存失敗の文言を表示しない", () => {
+    breakLoading();
+
+    render(<App />);
+
+    expect(screen.getByTestId("storage-warning")).not.toHaveTextContent(
+      "学習記録を保存できませんでした",
+    );
+  });
+
+  it("保存に失敗した場合は、保存できなかった旨の従来の文言を表示する", async () => {
+    breakSaving();
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(screen.getByRole("button", { name: "わかる" }));
+
+    const alert = screen.getByRole("alert");
+    expect(alert).toBe(screen.getByTestId("storage-warning"));
+    expect(alert).toHaveTextContent("学習記録を保存できませんでした");
+    expect(alert.textContent).toBe(SAVE_FAILED_WARNING);
+    expect(alert).not.toHaveTextContent("学習記録を読み込めなかったため");
+  });
+
+  it("読み出し失敗時と保存失敗時に画面へ出る文言は互いに異なる", async () => {
+    breakLoading();
+    const loadFailed = render(<App />);
+    const loadFailedText = screen.getByTestId("storage-warning").textContent;
+    loadFailed.unmount();
+    vi.restoreAllMocks();
+
+    breakSaving();
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByRole("button", { name: "わかる" }));
+    const saveFailedText = screen.getByTestId("storage-warning").textContent;
+
+    expect(loadFailedText).toBeTruthy();
+    expect(saveFailedText).toBeTruthy();
+    expect(loadFailedText).not.toBe(saveFailedText);
   });
 
   it("小数の回数が保存されていると、その単語は初期状態として扱われる", () => {
@@ -329,11 +373,15 @@ describe("App", () => {
     expect(screen.getByTestId("storage-warning")).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "わかる" }));
-    expect(screen.getByTestId("storage-warning")).toHaveTextContent("保存できませんでした");
+    expect(screen.getByTestId("storage-warning")).toHaveTextContent(
+      "学習記録を読み込めなかったため、この回は保存されません。",
+    );
     expect(screen.getByRole("alert")).toBe(screen.getByTestId("storage-warning"));
 
     await user.click(screen.getByRole("button", { name: "わからない" }));
-    expect(screen.getByTestId("storage-warning")).toHaveTextContent("保存できませんでした");
+    expect(screen.getByTestId("storage-warning")).toHaveTextContent(
+      "学習記録を読み込めなかったため、この回は保存されません。",
+    );
     expect(screen.getByRole("alert")).toBe(screen.getByTestId("storage-warning"));
   });
 
