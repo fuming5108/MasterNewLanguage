@@ -10,6 +10,17 @@ export type StorageLike = {
 };
 
 /**
+ * 読み出しの結果。
+ * `ok` が false のときは保存先そのものを読めなかったことを意味し、
+ * 画面に「記録が残らない」旨を伝えるための判断材料になる。
+ * 保存先は読めたが中身が壊れていた場合は、読める部分だけを採用して ok: true を返す。
+ */
+export type LoadProgressResult = {
+  readonly ok: boolean;
+  readonly progressMap: ProgressMap;
+};
+
+/**
  * 既定の保存先。プライベートモードなどで参照自体が例外を投げうるため包む。
  */
 export function defaultStorage(): StorageLike | undefined {
@@ -24,8 +35,9 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+/** 回数として受理できる値か。0 以上の整数のみを通し、小数や負数は受理しない。 */
 function isCount(value: unknown): value is number {
-  return typeof value === "number" && Number.isFinite(value) && value >= 0;
+  return typeof value === "number" && Number.isInteger(value) && value >= 0;
 }
 
 function toWordProgress(wordId: string, value: unknown): WordProgress | undefined {
@@ -54,21 +66,26 @@ function parseProgressMap(raw: string): ProgressMap {
 }
 
 /**
- * 保存された学習記録を読み出す。
- * 未保存・読み出し失敗・壊れた JSON のいずれでも空の記録を返し、例外は投げない。
+ * 保存された学習記録を読み出す。例外は投げない。
+ *
+ * - 保存先を読めた場合は ok: true。未保存・壊れた JSON・形の合わない要素は
+ *   読み捨てたうえで、読めた分だけの記録を返す。
+ * - 保存先が使えない、または読み出しが例外を投げた場合は ok: false と空の記録を返す。
  */
-export function loadProgress(storage: StorageLike | undefined = defaultStorage()): ProgressMap {
-  if (storage === undefined) return {};
+export function loadProgress(
+  storage: StorageLike | undefined = defaultStorage(),
+): LoadProgressResult {
+  if (storage === undefined) return { ok: false, progressMap: {} };
 
   let raw: string | null;
   try {
     raw = storage.getItem(PROGRESS_STORAGE_KEY);
   } catch {
-    return {};
+    return { ok: false, progressMap: {} };
   }
-  if (raw === null) return {};
+  if (raw === null) return { ok: true, progressMap: {} };
 
-  return parseProgressMap(raw);
+  return { ok: true, progressMap: parseProgressMap(raw) };
 }
 
 /**

@@ -6,22 +6,40 @@ import type { AnswerResult, ProgressMap } from "./features/vocabulary/types";
 import { WordCard } from "./features/vocabulary/WordCard";
 import { words } from "./features/vocabulary/words";
 
-export function App() {
-  const [progressMap, setProgressMap] = useState<ProgressMap>(() => loadProgress());
+/** 画面が持つ状態。保存できたかどうかは storage 層の戻り値をそのまま持つ。 */
+type VocabularyState = {
+  progressMap: ProgressMap;
+  /** 直近の読み書きが成功していれば true。UI 側では判定せず storage 層の結果を使う。 */
+  persisted: boolean;
+};
 
-  const word = selectNextWord(words, progressMap);
-  const total = totalScore(progressMap);
+function initialState(): VocabularyState {
+  const loaded = loadProgress();
+  return { progressMap: loaded.progressMap, persisted: loaded.ok };
+}
+
+export function App() {
+  const [state, setState] = useState<VocabularyState>(initialState);
+
+  const word = selectNextWord(words, state.progressMap);
+  const total = totalScore(state.progressMap);
 
   const handleAnswer = (result: AnswerResult) => {
     if (word === undefined) return;
-    const next = recordAnswerIn(progressMap, word.id, result);
-    setProgressMap(next);
-    saveProgress(next);
+    const next = recordAnswerIn(state.progressMap, word.id, result);
+    setState({ progressMap: next, persisted: saveProgress(next) });
   };
 
   return (
     <main>
       <h1>フランス語 語彙トレーニング</h1>
+
+      {state.persisted ? null : (
+        <p role="alert" data-testid="storage-warning">
+          学習記録を保存できませんでした。このブラウザでは記録が残らないため、
+          ページを閉じたり再読み込みしたりすると学習内容が失われます。
+        </p>
+      )}
 
       <p data-testid="total-score">
         累計 正解 {total.correct} / 不正解 {total.incorrect}
@@ -32,7 +50,7 @@ export function App() {
       ) : (
         <WordCard
           word={word}
-          progress={progressFor(progressMap, word.id)}
+          progress={progressFor(state.progressMap, word.id)}
           onAnswer={handleAnswer}
         />
       )}
