@@ -255,7 +255,7 @@ describe("App", () => {
 
     const alert = screen.getByRole("alert");
     expect(alert).toBe(screen.getByTestId("storage-warning"));
-    expect(alert).toHaveTextContent("学習記録を読み込めなかったため、この回は保存されません。");
+    expect(alert.textContent).toBe("学習記録を読み込めなかったため、この回は保存されません。");
     expect(alert.textContent).toBe(LOAD_FAILED_WARNING);
     expect(screen.getByTestId("total-score")).toHaveTextContent("累計 正解 0 / 不正解 0");
   });

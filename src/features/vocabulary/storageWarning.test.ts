@@ -6,6 +6,19 @@ import {
   storageWarningKindFor,
 } from "./storageWarning";
 
+describe("警告文言の定数", () => {
+  it("読み出し失敗の文言は、一文だけで完全一致する", () => {
+    expect(LOAD_FAILED_WARNING).toBe("学習記録を読み込めなかったため、この回は保存されません。");
+  });
+
+  it("保存失敗の文言は従来どおりで変更されていない", () => {
+    expect(SAVE_FAILED_WARNING).toBe(
+      "学習記録を保存できませんでした。このブラウザでは記録が残らないため、" +
+        "ページを閉じたり再読み込みしたりすると学習内容が失われます。",
+    );
+  });
+});
+
 describe("storageWarningFor", () => {
   it("読み書きできている状態では警告を出さない", () => {
     expect(storageWarningFor({ savingAllowed: true, persisted: true })).toBeUndefined();
@@ -16,7 +29,7 @@ describe("storageWarningFor", () => {
     const message = storageWarningFor({ savingAllowed: false, persisted: false });
 
     expect(message).toBe(LOAD_FAILED_WARNING);
-    expect(message).toContain("学習記録を読み込めなかったため、この回は保存されません。");
+    expect(message).toBe("学習記録を読み込めなかったため、この回は保存されません。");
     expect(storageWarningKindFor({ savingAllowed: false, persisted: false })).toBe("load-failed");
   });
 
@@ -24,6 +37,10 @@ describe("storageWarningFor", () => {
     const message = storageWarningFor({ savingAllowed: true, persisted: false });
 
     expect(message).toBe(SAVE_FAILED_WARNING);
+    expect(message).toBe(
+      "学習記録を保存できませんでした。このブラウザでは記録が残らないため、" +
+        "ページを閉じたり再読み込みしたりすると学習内容が失われます。",
+    );
     expect(message).toContain("学習記録を保存できませんでした");
     expect(storageWarningKindFor({ savingAllowed: true, persisted: false })).toBe("save-failed");
   });

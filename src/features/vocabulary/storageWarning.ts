@@ -8,9 +8,7 @@
 export type StorageWarningKind = "load-failed" | "save-failed";
 
 /** 起動時の読み出しに失敗し、その回は保存を試みてすらいない場合の文言。 */
-export const LOAD_FAILED_WARNING =
-  "学習記録を読み込めなかったため、この回は保存されません。" +
-  "学習は続けられますが、この回の回答は記録に残りません。";
+export const LOAD_FAILED_WARNING = "学習記録を読み込めなかったため、この回は保存されません。";
 
 /** 保存を試みて失敗した場合の文言。 */
 export const SAVE_FAILED_WARNING =
