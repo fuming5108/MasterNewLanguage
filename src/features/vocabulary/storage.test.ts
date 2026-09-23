@@ -1,10 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { SESSION_LENGTH, startSession } from "./session";
 import {
   loadProgress,
+  loadStudyState,
   mayPersist,
   PROGRESS_STORAGE_KEY,
+  SESSION_STORAGE_KEY,
   type StorageLike,
   saveProgress,
+  saveSession,
 } from "./storage";
 import type { ProgressMap } from "./types";
 
@@ -191,5 +195,143 @@ describe("storage", () => {
 
   it("保存先が空でも読み出せていれば保存を許可する", () => {
     expect(mayPersist(loadProgress(createMemoryStorage()))).toBe(true);
+  });
+});
+
+describe("storage（セッション進行）", () => {
+  /** 読み出したキーを記録する保存先。どのキーを何回読んだかを検証するために使う。 */
+  function createRecordingStorage(
+    initial: Record<string, string>,
+    options: { throwOnGet?: boolean } = {},
+  ): { storage: StorageLike; reads: string[] } {
+    const data = new Map(Object.entries(initial));
+    const reads: string[] = [];
+    return {
+      reads,
+      storage: {
+        getItem: (key) => {
+          reads.push(key);
+          if (options.throwOnGet === true) throw new Error("読み出しできません");
+          return data.get(key) ?? null;
+        },
+        setItem: (key, value) => {
+          data.set(key, value);
+        },
+      },
+    };
+  }
+
+  it("保存したセッション進行をそのまま読み出せる", () => {
+    const storage = createMemoryStorage();
+
+    expect(saveSession({ answered: 5, correct: 3, incorrect: 2 }, storage)).toBe(true);
+
+    const loaded = loadStudyState(storage);
+    expect(loaded.ok).toBe(true);
+    expect(loaded.session).toEqual({ answered: 5, correct: 3, incorrect: 2 });
+  });
+
+  it("セッション進行が未保存なら新しいセッションを返す", () => {
+    const loaded = loadStudyState(createMemoryStorage());
+
+    expect(loaded.ok).toBe(true);
+    expect(loaded.session).toEqual(startSession());
+  });
+
+  it("セッション進行が壊れた JSON でも新しいセッションとして読み出せる", () => {
+    const storage = createMemoryStorage({ [SESSION_STORAGE_KEY]: "{壊れた JSON" });
+
+    const loaded = loadStudyState(storage);
+
+    expect(loaded.ok).toBe(true);
+    expect(loaded.session).toEqual(startSession());
+  });
+
+  it("内訳の合わないセッション進行は新しいセッションとして扱う", () => {
+    const storage = createMemoryStorage({
+      [SESSION_STORAGE_KEY]: JSON.stringify({ answered: 5, correct: 1, incorrect: 1 }),
+    });
+
+    expect(loadStudyState(storage).session).toEqual(startSession());
+  });
+
+  it("問数を超えたセッション進行は新しいセッションとして扱う", () => {
+    const storage = createMemoryStorage({
+      [SESSION_STORAGE_KEY]: JSON.stringify({
+        answered: SESSION_LENGTH + 1,
+        correct: SESSION_LENGTH + 1,
+        incorrect: 0,
+      }),
+    });
+
+    expect(loadStudyState(storage).session).toEqual(startSession());
+  });
+
+  it("回数が数値でないセッション進行は新しいセッションとして扱う", () => {
+    const storage = createMemoryStorage({
+      [SESSION_STORAGE_KEY]: JSON.stringify({ answered: "5", correct: 3, incorrect: 2 }),
+    });
+
+    expect(loadStudyState(storage).session).toEqual(startSession());
+  });
+
+  it("学習記録とセッション進行を同時に読み出せる", () => {
+    const progressMap: ProgressMap = { livre: { wordId: "livre", correct: 1, incorrect: 0 } };
+    const storage = createMemoryStorage();
+    saveProgress(progressMap, storage);
+    saveSession({ answered: 1, correct: 1, incorrect: 0 }, storage);
+
+    const loaded = loadStudyState(storage);
+
+    expect(loaded.progressMap).toEqual(progressMap);
+    expect(loaded.session).toEqual({ answered: 1, correct: 1, incorrect: 0 });
+  });
+
+  it("読み出しに失敗すると保存を許可せず、新しいセッションを返す", () => {
+    const loaded = loadStudyState(throwingStorage);
+
+    expect(loaded.ok).toBe(false);
+    expect(mayPersist(loaded)).toBe(false);
+    expect(loaded.progressMap).toEqual({});
+    expect(loaded.session).toEqual(startSession());
+  });
+
+  it("学習記録の読み出しに失敗した場合、セッション進行は読みにいかない", () => {
+    const { storage, reads } = createRecordingStorage({}, { throwOnGet: true });
+
+    expect(loadStudyState(storage).ok).toBe(false);
+    expect(reads).toEqual([PROGRESS_STORAGE_KEY]);
+  });
+
+  it("既定の保存先を参照できない環境ではセッション進行を保存しない", () => {
+    withThrowingLocalStorageAccess(() => {
+      expect(saveSession({ answered: 1, correct: 1, incorrect: 0 })).toBe(false);
+    });
+  });
+
+  it("セッション進行の保存に失敗しても例外を投げず false を返す", () => {
+    expect(saveSession({ answered: 1, correct: 1, incorrect: 0 }, throwingStorage)).toBe(false);
+  });
+
+  it("セッション進行を保存しても学習記録は壊れない", () => {
+    const progressMap: ProgressMap = { livre: { wordId: "livre", correct: 2, incorrect: 1 } };
+    const storage = createMemoryStorage();
+    saveProgress(progressMap, storage);
+
+    saveSession({ answered: 3, correct: 2, incorrect: 1 }, storage);
+
+    expect(loadProgress(storage).progressMap).toEqual(progressMap);
+  });
+
+  it("セッション進行は学習記録とは別のキーに保存する", () => {
+    expect(SESSION_STORAGE_KEY).not.toBe(PROGRESS_STORAGE_KEY);
+  });
+
+  it("既定の保存先を参照できない環境でも loadStudyState は例外を投げない", () => {
+    withThrowingLocalStorageAccess(() => {
+      const loaded = loadStudyState();
+      expect(loaded.ok).toBe(false);
+      expect(loaded.session).toEqual(startSession());
+    });
   });
 });

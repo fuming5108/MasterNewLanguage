@@ -2,7 +2,10 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, type MockInstance, vi } from "vitest";
 import { App } from "./App";
-import { PROGRESS_STORAGE_KEY } from "./features/vocabulary/storage";
+// App.tsx のソースそのものを読み、進行管理が画面側に埋め込まれていないことを確かめる。
+import appSource from "./App.tsx?raw";
+import { SESSION_LENGTH } from "./features/vocabulary/session";
+import { PROGRESS_STORAGE_KEY, SESSION_STORAGE_KEY } from "./features/vocabulary/storage";
 import { LOAD_FAILED_WARNING, SAVE_FAILED_WARNING } from "./features/vocabulary/storageWarning";
 import { words } from "./features/vocabulary/words";
 
@@ -440,5 +443,241 @@ describe("App", () => {
     expect(setItem).not.toHaveBeenCalled();
     // 画面は起動時の読み出し結果だけで判断し、回答のたびに localStorage を読み直さない。
     expect(getItem).toHaveBeenCalledTimes(1);
+  });
+});
+
+/** userEvent.setup() の戻り値。ヘルパーの引数の型に使う。 */
+type User = ReturnType<typeof userEvent.setup>;
+
+/** 表示中のカードに同じ答えを count 回返す。 */
+async function answerTimes(
+  user: User,
+  count: number,
+  label: "わかる" | "わからない",
+): Promise<void> {
+  for (let index = 0; index < count; index += 1) {
+    await user.click(screen.getByRole("button", { name: label }));
+  }
+}
+
+describe("App（セッション）", () => {
+  beforeEach(() => {
+    localStorage.clear();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("セッション開始時に「1 / 10」の進捗が表示される", () => {
+    render(<App />);
+
+    expect(screen.getByTestId("session-progress")).toHaveTextContent("1 / 10");
+  });
+
+  it("1問答えるごとに進捗の分子が1増える", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await answerTimes(user, 1, "わかる");
+    expect(screen.getByTestId("session-progress")).toHaveTextContent("2 / 10");
+
+    await answerTimes(user, 1, "わからない");
+    expect(screen.getByTestId("session-progress")).toHaveTextContent("3 / 10");
+
+    await answerTimes(user, 1, "わかる");
+    expect(screen.getByTestId("session-progress")).toHaveTextContent("4 / 10");
+  });
+
+  it("9問答えた時点では終了画面を表示せず、単語カードが出ている", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await answerTimes(user, 9, "わかる");
+
+    expect(screen.queryByTestId("session-finished")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("session-result")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "もう一度" })).not.toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "単語カード" })).toBeInTheDocument();
+    expect(screen.getByTestId("session-progress")).toHaveTextContent("10 / 10");
+  });
+
+  it("10問目に答えると終了画面に切り替わる", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await answerTimes(user, SESSION_LENGTH, "わかる");
+
+    expect(screen.getByTestId("session-finished")).toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "単語カード" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "わかる" })).not.toBeInTheDocument();
+    expect(screen.queryByTestId("session-progress")).not.toBeInTheDocument();
+  });
+
+  it("終了画面にそのセッションの正解数と不正解数が表示される", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await answerTimes(user, 7, "わかる");
+    await answerTimes(user, 3, "わからない");
+
+    expect(screen.getByTestId("session-result")).toHaveTextContent("正解 7 / 不正解 3");
+  });
+
+  it("「もう一度」を押すと新しいセッションが1問目から始まる", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await answerTimes(user, 6, "わかる");
+    await answerTimes(user, 4, "わからない");
+    expect(screen.getByTestId("session-result")).toHaveTextContent("正解 6 / 不正解 4");
+
+    await user.click(screen.getByRole("button", { name: "もう一度" }));
+
+    expect(screen.queryByTestId("session-finished")).not.toBeInTheDocument();
+    expect(screen.getByTestId("session-progress")).toHaveTextContent("1 / 10");
+    expect(screen.getByRole("region", { name: "単語カード" })).toBeInTheDocument();
+  });
+
+  it("「もう一度」で始めたセッションの成績は前回を引き継がない", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await answerTimes(user, 10, "わからない");
+    await user.click(screen.getByRole("button", { name: "もう一度" }));
+    await answerTimes(user, 10, "わかる");
+
+    expect(screen.getByTestId("session-result")).toHaveTextContent("正解 10 / 不正解 0");
+  });
+
+  it("5問答えた状態でマウントし直すと6問目から再開する", async () => {
+    const user = userEvent.setup();
+    const first = render(<App />);
+
+    await answerTimes(user, 5, "わかる");
+    expect(screen.getByTestId("session-progress")).toHaveTextContent("6 / 10");
+    first.unmount();
+
+    render(<App />);
+
+    expect(screen.getByTestId("session-progress")).toHaveTextContent("6 / 10");
+    expect(screen.queryByTestId("session-finished")).not.toBeInTheDocument();
+  });
+
+  it("マウントし直してもそのセッションの正解数・不正解数を引き継ぐ", async () => {
+    const user = userEvent.setup();
+    const first = render(<App />);
+
+    await answerTimes(user, 3, "わかる");
+    await answerTimes(user, 2, "わからない");
+    first.unmount();
+
+    render(<App />);
+    await answerTimes(user, 5, "わかる");
+
+    expect(screen.getByTestId("session-result")).toHaveTextContent("正解 8 / 不正解 2");
+  });
+
+  it("終了したセッションはマウントし直しても終了画面のままになる", async () => {
+    const user = userEvent.setup();
+    const first = render(<App />);
+
+    await answerTimes(user, 4, "わかる");
+    await answerTimes(user, 6, "わからない");
+    first.unmount();
+
+    render(<App />);
+
+    expect(screen.getByTestId("session-finished")).toBeInTheDocument();
+    expect(screen.getByTestId("session-result")).toHaveTextContent("正解 4 / 不正解 6");
+  });
+
+  it("「もう一度」のあとにマウントし直しても1問目から始まる", async () => {
+    const user = userEvent.setup();
+    const first = render(<App />);
+
+    await answerTimes(user, 10, "わかる");
+    await user.click(screen.getByRole("button", { name: "もう一度" }));
+    first.unmount();
+
+    render(<App />);
+
+    expect(screen.getByTestId("session-progress")).toHaveTextContent("1 / 10");
+    expect(screen.queryByTestId("session-finished")).not.toBeInTheDocument();
+  });
+
+  it("読み出しに失敗した起動では、5問答えてもセッション進行が保存されない", async () => {
+    seedStoredProgress({
+      [words[0].id]: { wordId: words[0].id, correct: 3, incorrect: 2 },
+    });
+    const before = snapshotStorage();
+    const setItem = vi.spyOn(Storage.prototype, "setItem");
+    breakLoading();
+    const user = userEvent.setup();
+    render(<App />);
+
+    await answerTimes(user, 3, "わかる");
+    await answerTimes(user, 2, "わからない");
+    expect(screen.getByTestId("session-progress")).toHaveTextContent("6 / 10");
+
+    expect(setItem).not.toHaveBeenCalled();
+    vi.restoreAllMocks();
+    expect(snapshotStorage()).toEqual(before);
+    expect(localStorage.getItem(SESSION_STORAGE_KEY)).toBeNull();
+  });
+
+  it("読み出しに失敗した起動で答えたあと、マウントし直すと1問目から始まる", async () => {
+    breakLoading();
+    const user = userEvent.setup();
+    const first = render(<App />);
+
+    await answerTimes(user, 5, "わかる");
+    expect(screen.getByTestId("session-progress")).toHaveTextContent("6 / 10");
+    first.unmount();
+    vi.restoreAllMocks();
+
+    render(<App />);
+
+    expect(screen.getByTestId("session-progress")).toHaveTextContent("1 / 10");
+  });
+
+  it("読み出しに失敗した起動では、10問答えてもセッション進行が保存されない", async () => {
+    const setItem = vi.spyOn(Storage.prototype, "setItem");
+    breakLoading();
+    const user = userEvent.setup();
+    render(<App />);
+
+    await answerTimes(user, 10, "わかる");
+
+    expect(screen.getByTestId("session-finished")).toBeInTheDocument();
+    expect(setItem).not.toHaveBeenCalled();
+    vi.restoreAllMocks();
+    expect(localStorage.getItem(SESSION_STORAGE_KEY)).toBeNull();
+  });
+
+  it("読み出しに失敗した起動では、「もう一度」を押してもセッション進行が保存されない", async () => {
+    const setItem = vi.spyOn(Storage.prototype, "setItem");
+    breakLoading();
+    const user = userEvent.setup();
+    render(<App />);
+
+    await answerTimes(user, 10, "わかる");
+    await user.click(screen.getByRole("button", { name: "もう一度" }));
+
+    expect(screen.getByTestId("session-progress")).toHaveTextContent("1 / 10");
+    expect(setItem).not.toHaveBeenCalled();
+    vi.restoreAllMocks();
+    expect(localStorage.getItem(SESSION_STORAGE_KEY)).toBeNull();
+  });
+
+  it("セッションの進行管理は純粋関数に切り出され、App の中に埋め込まれていない", () => {
+    const source = appSource;
+
+    expect(source).toContain('from "./features/vocabulary/session"');
+    expect(source).toContain("isSessionFinished");
+    expect(source).toContain("sessionProgressLabel");
+    // 問数や「何問目か」の計算を App 側で組み立てていないこと。
+    expect(source).not.toMatch(/\b10\b/);
+    expect(source).not.toContain("answered");
   });
 });

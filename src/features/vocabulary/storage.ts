@@ -1,7 +1,11 @@
-import type { ProgressMap, WordProgress } from "./types";
+import { SESSION_LENGTH, startSession } from "./session";
+import type { ProgressMap, SessionState, WordProgress } from "./types";
 
 /** 学習記録の保存先キー。形式を変えるときは末尾の版数を上げる。 */
 export const PROGRESS_STORAGE_KEY = "mnl:vocabulary:progress:v1";
+
+/** セッション進行の保存先キー。学習記録とは別に持ち、互いの形式に影響しない。 */
+export const SESSION_STORAGE_KEY = "mnl:vocabulary:session:v1";
 
 /** localStorage のうち、この機能が使う部分だけを表す最小の型。 */
 export type StorageLike = {
@@ -95,7 +99,7 @@ export function loadProgress(
  * その状態で保存すると、保存先に残っている既存の記録を空起点のデータで
  * 上書きして壊す。壊さないことを優先し、その回は一切保存しない。
  */
-export function mayPersist(loaded: LoadProgressResult): boolean {
+export function mayPersist(loaded: { readonly ok: boolean }): boolean {
   return loaded.ok;
 }
 
@@ -110,6 +114,86 @@ export function saveProgress(
   if (storage === undefined) return false;
   try {
     storage.setItem(PROGRESS_STORAGE_KEY, JSON.stringify(progressMap));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 起動時にまとめて読み出した学習状態。
+ * `ok` が false のときは保存先を読めなかったことを意味し、その回は一切保存しない。
+ */
+export type LoadStudyStateResult = {
+  readonly ok: boolean;
+  readonly progressMap: ProgressMap;
+  readonly session: SessionState;
+};
+
+/** 読み出しに失敗したときの戻り値。手元は空から始め、保存は許可しない。 */
+function failedStudyState(): LoadStudyStateResult {
+  return { ok: false, progressMap: {}, session: startSession() };
+}
+
+/**
+ * 保存されたセッション進行を解釈する。
+ * 形が合わない、回数の内訳が合わない、問数を超えている場合は新しいセッションとして扱う。
+ */
+function parseSession(raw: string): SessionState {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return startSession();
+  }
+  if (!isRecord(parsed)) return startSession();
+
+  const { answered, correct, incorrect } = parsed;
+  if (!isCount(answered) || !isCount(correct) || !isCount(incorrect)) return startSession();
+  if (answered > SESSION_LENGTH) return startSession();
+  if (correct + incorrect !== answered) return startSession();
+  return { answered, correct, incorrect };
+}
+
+/**
+ * 学習記録とセッション進行を起動時に1度だけ読み出す。例外は投げない。
+ *
+ * 学習記録の読み出しに失敗した時点で、その起動は保存しないことが決まるため、
+ * セッション進行は読みにいかない。どちらかの読み出しが失敗したら ok: false を返す。
+ */
+export function loadStudyState(
+  storage: StorageLike | undefined = defaultStorage(),
+): LoadStudyStateResult {
+  if (storage === undefined) return failedStudyState();
+
+  const loaded = loadProgress(storage);
+  if (!loaded.ok) return failedStudyState();
+
+  let raw: string | null;
+  try {
+    raw = storage.getItem(SESSION_STORAGE_KEY);
+  } catch {
+    return failedStudyState();
+  }
+
+  return {
+    ok: true,
+    progressMap: loaded.progressMap,
+    session: raw === null ? startSession() : parseSession(raw),
+  };
+}
+
+/**
+ * セッション進行を保存する。保存できなくても例外は投げない。
+ * 保存に成功したときだけ true を返す。
+ */
+export function saveSession(
+  session: SessionState,
+  storage: StorageLike | undefined = defaultStorage(),
+): boolean {
+  if (storage === undefined) return false;
+  try {
+    storage.setItem(SESSION_STORAGE_KEY, JSON.stringify(session));
     return true;
   } catch {
     return false;
